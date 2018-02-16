@@ -1,46 +1,67 @@
 <?php
 /**
- * bcls-proxy.php - proxy for Brightcove RESTful APIs
+ * proxy for Brightcove RESTful APIs
  * gets an access token, makes the request, and returns the response
  * Accessing:
  *         (note you should *always* access the proxy via HTTPS)
  *     Method: POST
+ *     request body (accessed via php://input) is a JSON object with the following properties
  *
- * @post {string} url - the URL for the API request
- * @post {string} [requestType=GET] - HTTP method for the request
- * @post {string} [requestBody=null] - JSON data to be sent with write requests
- * @post {string} client_id - OAuth2 client id with sufficient permissions for the request
- * @post {string} client_secret - OAuth2 client secret with sufficient permissions for the request
+ * {string} url - the URL for the API request
+ * {string} [requestType=GET] - HTTP method for the request
+ * {string} [requestBody] - JSON data to be sent with write requests
+ * {string} [client_id] - OAuth2 client id with sufficient permissions for the request
+ * {string} [client_secret] - OAuth2 client secret with sufficient permissions for the request
+ * {string} [account_id] - Brightcove account id
+ *
+ * if client_id, client_secret, or account_id are not included in the request, default values will be used
  *
  * @returns {string} $response - JSON response received from the API
  */
 
 // security checks
-if (strpos($_SERVER['HTTP_REFERER'], 'solutions.brightcove.com') == false && strpos($_SERVER['HTTP_REFERER'], 'docs.brightcove.com') == false && strpos($_SERVER['HTTP_REFERER'], 's.codepen.io') == false && strpos($_SERVER['HTTP_REFERER'], 'players.brightcove.net') == false && strpos($_SERVER['HTTP_REFERER'], 'bcdocs.pronovix.net') == false) {
-    exit('{"ERROR":"Only requests from http://docs.brightcove.com or http:solutions.brightcove.com are accepted by this proxy"}');
-}
+// if you want to do some basic security checks, such as checking the origin of the
+// the request against some white list, this is the place to do it
 // CORS enablement and other headers
 header("Access-Control-Allow-Origin: *");
 header("Content-type: application/json");
 header("X-Content-Type-Options: nosniff");
 header("X-XSS-Protection");
 
-// set up request for access token
-$data = array();
+// default account values
+// if you work on one Brightcove account, put in the values below
+// if you do not provide defaults, the account id, client id, and client secret must
+// be sent in the request body for each request
+$default_account_id    = 'YOUR_ACCOUNT_ID';
+$default_client_id     = 'YOUR_CLIENT_ID';
+$default_client_secret = 'YOUR_CLIENT_SECRET';
 
-if ($_POST["client_id"]) {
-    $client_id = $_POST["client_id"];
+// get request body
+$requestData = json_decode(file_get_contents('php://input'));
+
+// set up access token request
+if ($requestData->client_id) {
+    $client_id = $requestData->client_id;
 } else {
-    $client_id = '123456789';
+    // default to the id for all permissions for most BCLS accounts
+    $client_id = $default_client_id;
 }
-if ($_POST["client_secret"]) {
-    $client_secret = $_POST["client_secret"];
+if ($requestData->client_secret) {
+    $client_secret = $requestData->client_secret;
 } else {
-    $client_secret = '123456789123456789';
+    // default to the secret for all permissions for most BCLS accounts
+    $client_secret = $default_client_secret;
 }
-$auth_string   = "{$client_id}:{$client_secret}";
-$request       = "https://oauth.brightcove.com/v4/access_token?grant_type=client_credentials";
-$ch            = curl_init($request);
+if ($requestData->ccount_id) {
+    $account_id = $requestData->account_id;
+} else {
+    // default to Doc Samples account; change to default to BrightcoveLearning or another account
+    $account_id = $default_account_id;
+}
+
+$auth_string = "{$client_id}:{$client_secret}";
+$request     = "https://oauth.brightcove.com/v4/access_token?grant_type=client_credentials";
+$ch          = curl_init($request);
 curl_setopt_array($ch, array(
         CURLOPT_POST           => TRUE,
         CURLOPT_RETURNTRANSFER => TRUE,
@@ -49,7 +70,6 @@ curl_setopt_array($ch, array(
         CURLOPT_HTTPHEADER     => array(
             'Content-type: application/x-www-form-urlencoded',
         ),
-        CURLOPT_POSTFIELDS => $data
     ));
 $response = curl_exec($ch);
 curl_close($ch);
@@ -63,47 +83,55 @@ if ($response === FALSE) {
 $responseData = json_decode($response, TRUE);
 $access_token = $responseData["access_token"];
 
-// set up the API call
-// get data
-if ($_POST["requestBody"]) {
-    $data = json_decode($_POST["requestBody"]);
-} else {
-    $data = array();
-}
 // get request type or default to GET
-if ($_POST["requestType"]) {
-    $method = $_POST["requestType"];
+if ($requestData->requestType) {
+    $method = $requestData->requestType;
 } else {
     $method = "GET";
 }
 
 // more security checks
-$needle = '.com';
-$endapi = strpos($_POST["url"], $needle) + 4;
-$nextChar = substr($_POST['url'], $endapi, 1);
-if (strpos($_POST["url"], 'api.brightcove.com') == false) {
-    exit('{"ERROR":"Only requests to Brightcove APIs are accepted by this proxy"}');
-} else if ($nextChar !== '/' && $nextChar !== '?') {
-    exit('{"ERROR": "There was a problem with your API request - please check the URL"}');
-}
-// get the URL and authorization info from the form data
-$request = $_POST["url"];
-//send the http request
-$ch = curl_init($request);
-curl_setopt_array($ch, array(
-        CURLOPT_CUSTOMREQUEST  => $method,
-        CURLOPT_RETURNTRANSFER => TRUE,
-        CURLOPT_SSL_VERIFYPEER => FALSE,
-        CURLOPT_HTTPHEADER     => array(
-            'Content-type: application/json',
-            "Authorization: Bearer {$access_token}",
-        ),
-        CURLOPT_POSTFIELDS => json_encode($data)
-    ));
-$response = curl_exec($ch);
-curl_close($ch);
+// optional: you might want to check the URL for the API request here
+// and make sure it is to an approved API
+// and that there is no suspicious code appended to the URL
 
-// Check for errors
+
+// get the URL and authorization info from the form data
+$request = $requestData->url;
+//send the http request
+if ($requestData->requestBody) {
+  $ch = curl_init($request);
+  curl_setopt_array($ch, array(
+    CURLOPT_CUSTOMREQUEST  => $method,
+    CURLOPT_RETURNTRANSFER => TRUE,
+    CURLOPT_SSL_VERIFYPEER => FALSE,
+    CURLOPT_HTTPHEADER     => array(
+      'Content-type: application/json',
+      "Authorization: Bearer {$access_token}",
+    ),
+    CURLOPT_POSTFIELDS => $requestData->requestBody
+  ));
+  $response = curl_exec($ch);
+  curl_close($ch);
+} else {
+  $ch = curl_init($request);
+  curl_setopt_array($ch, array(
+    CURLOPT_CUSTOMREQUEST  => $method,
+    CURLOPT_RETURNTRANSFER => TRUE,
+    CURLOPT_SSL_VERIFYPEER => FALSE,
+    CURLOPT_HTTPHEADER     => array(
+      'Content-type: application/json',
+      "Authorization: Bearer {$access_token}",
+    )
+  ));
+  $response = curl_exec($ch);
+  curl_close($ch);
+}
+
+// Check for errors and log them if any
+// note that logging will fail unless
+// the file log.txt exists in the same
+// directory as the proxy and is writable
 if ($response === FALSE) {
     $logEntry = "\nError:\n".
     "\n".date("Y-m-d H:i:s")." UTC \n"
